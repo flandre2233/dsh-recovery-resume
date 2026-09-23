@@ -5,3 +5,6 @@ node_modules/
 # 编辑器 / 系统
 .DS_Store
 *.log
+
+# npm pack 的产物（发布时才需要，不入库）
+*.tgz
