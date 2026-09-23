@@ -79,7 +79,7 @@ dsh-recovery-resume: 续跑消息已入队 session-…
 dsh-recovery-resume: 已重新武装 goal …
 ```
 
-Silence is normal when there is nothing to resume. The README.zh.md has the full list of
+Silence is normal when there is nothing to resume. The [Chinese README](README.md) has the full list of
 log lines and what each one means.
 
 ## Tests
