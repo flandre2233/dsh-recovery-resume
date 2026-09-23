@@ -1,76 +1,72 @@
 # dsh-recovery-resume
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) plugin that
-resumes a turn interrupted by a host restart — and makes the agent **verify real-world
-state first** instead of blindly sending "continue".
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）插件：
+重启后被中断的回合自动接起来继续做 —— 而且要求 Agent **先核对真实状态**，不是简单发一句「继续」。
 
-English | [中文](README.zh.md)
+中文 | [English](README.EN.md)
 
-## Why
+## 为什么需要它
 
-DSH restores your session after a restart, and its crash repair writes a
-`turn/end reason=interrupted` for the cut-off turn. But nothing acts on that: the turn
-just sits there until you send another message. This plugin does that part.
+重启后 DSH 会恢复你的会话，崩溃修复也会给被截断的回合补上 `turn/end reason=interrupted`。
+但**没有任何东西会因此行动**：那个回合就静静躺在事件流里，直到你再发一条消息。本插件补的就是这一环。
 
-The continuation message is not the word "continue". A restart can happen mid-download or
-mid-push, so the message tells the agent to check what actually happened, redo
-idempotently when unsure, and never assume a side effect succeeded or failed.
+续跑消息不是「继续」两个字。重启可能发生在一半的下载或推送中间，所以消息要求 Agent
+先查实际发生了什么、不确定就用幂等的方式重做，**不许假定成功，也不许假定失败**。
 
-## Install
+## 安装
 
 ```sh
 dsh plugin --profile web add github:flandre2233/dsh-recovery-resume
 ```
 
-Then restart DSH (host-side plugins are not hot-reloaded).
+装完**重启 DSH**（host 侧插件不会热加载）。
 
-No external dependencies: no `@deepseek-ai/*` imports, no `node_modules`, nothing to build.
+零外部依赖：不 import `@deepseek-ai/*`、不需要 `node_modules`、没有构建步骤。
 
-## When it fires
+## 什么时候会触发
 
-Only when all of these hold, otherwise it does nothing:
+下面几条**同时**成立才续跑，否则不动：
 
-- the last `turn/end` in the session log has reason `interrupted`, `error`, or `max-tokens`
-- nothing follows it — no new turn, no message from you
-- the interruption is at most 15 minutes old
-- the session actually becomes live (`agent/created` or `agent/status → idle`)
+- 会话日志里最后一条 `turn/end` 的 reason 是 `interrupted` / `error` / `max-tokens`
+- 它之后没有新回合、也没有你发的消息
+- 中断在 **15 分钟**以内
+- 会话真的活了（`agent/created` 或 `agent/status → idle`）
 
-Permanent failures (`AUTH`, quota exhausted, context overflow) are skipped — retrying them
-would only burn tokens. The code list comes from DSH's own `DEFAULT_RETRYABLE_CODES`.
+**永久性失败不续跑**（`AUTH`、配额耗尽、上下文超限）—— 重试只会烧 token。
+判断用的是 DSH 官方错误码表 `DEFAULT_RETRYABLE_CODES`。
 
-It also re-arms an `active` goal (the same API as the "continue" button in the UI) so goal
-rounds keep advancing. `paused` and `blocked` goals are left alone.
+它还会重新武装 `active` 状态的 goal（就是界面上「继续」按钮用的同一个 API），
+让目标自己继续推进；**`paused` / `blocked` 的目标绝不动**。
 
-## Runaway protection
+## 防失控（三层）
 
-Three layers, because in-process counters reset on every restart:
+进程内计数在每次重启时归零，所以必须有三层：
 
-| Layer | Limit |
+| 层 | 限制 |
 |---|---|
-| 1 | one resume per session per process |
-| 2 | three consecutive unsuccessful resumes, tracked across restarts in `$DSH_HOME/recovery-attempts.json` |
-| 3 | at least 5 minutes between resumes |
+| 1 | 同一进程内，同一会话最多续 1 次 |
+| 2 | **跨重启**连续未成功最多 3 次（`$DSH_HOME/recovery-attempts.json`） |
+| 3 | 两次续跑至少间隔 5 分钟 |
 
-Backoff only counts *failures*: if the turn sequence advanced since the last attempt, the
-counter resets. Over the limit, it logs and stops.
+退避**只累计失败**：如果回合序号比上次记录前进了，计数清零。
+超限时只写日志、停下等人。
 
-## Checking it works
-
-```sh
-dsh --profile web --dump-config | grep -A2 recovery-resume   # loaded?
-```
-
-For what it decided, look where your DSH process writes stdout: the plugin logs with
-`console.log`, so the lines appear in the terminal running `dsh web`, or in whatever your
-launcher redirects that stream to (an app bundle that forks the host typically appends it to
-`~/.dsh/host.log` — that file is the launcher's, not DSH's, and will not exist if you start
-DSH by hand). Grep for `dsh-recovery-resume`:
+## 怎么确认它在工作
 
 ```sh
-grep dsh-recovery-resume ~/.dsh/host.log   # if your launcher writes one
+dsh --profile web --dump-config | grep -A2 recovery-resume   # 插件加载了吗
 ```
 
-A trigger looks like this:
+要看它的判断，得找你的 DSH 进程把 stdout 写到哪：插件用 `console.log`，
+所以这些行会出现在跑 `dsh web` 的那个终端里，或者出现在你的启动器把它重定向到的地方
+（fork host 的 app 包通常追加到 `~/.dsh/host.log` —— **那是启动器造的文件，不是 DSH 的**；
+手动起 DSH 就不会有它）。按名字过滤：
+
+```sh
+grep dsh-recovery-resume ~/.dsh/host.log   # 如果你的启动器会写这个文件
+```
+
+触发时长这样：
 
 ```
 dsh-recovery-resume: agent 创建 id=session-… status=idle
@@ -79,27 +75,32 @@ dsh-recovery-resume: 续跑消息已入队 session-…
 dsh-recovery-resume: 已重新武装 goal …
 ```
 
-Silence is normal when there is nothing to resume. The README.zh.md has the full list of
-log lines and what each one means.
+**什么都没发生**是正常的。下面这些说法也都是正常的，不是故障：
 
-## Tests
+| 日志 | 含义 |
+|---|---|
+| `无需续跑（尾部没有未处理的中断）` | 上次正常结束，或你已经处理过了 |
+| `跳过 …（上次失败是永久性的…）` | 认证/配额/上下文超限 → 重试无益，正确行为 |
+| `跳过 …（本次进程已续跑 1 次）` | 第一层限制生效 |
+| `冷却中（还需 N 秒）` | 第三层限制生效 |
+| 一行都没有 | 插件没被加载 —— 先跑上面的 `--dump-config` |
+
+## 测试
 
 ```sh
-bash tests/run.sh    # 82 cases, zero dependencies, DSH does not need to be running
+bash tests/run.sh    # 82 个用例，零依赖，不需要 DSH 在运行
 ```
 
-## Limitations
+## 已知限制
 
-- Tested only against DSH `0.1.6-alpha.1` on macOS 13 (Intel). Session events and the agent
-  lifecycle are internal APIs — re-run the tests after upgrading DSH.
-- The 15-minute freshness window is fixed, not configurable.
-- Does not decide whether the task was actually finished before the interruption. If it was,
-  you get one extra round (the message asks the agent to check first).
-- Subagent sessions are skipped.
+- 只在 DSH `0.1.6-alpha.1` + macOS 13（Intel）上实测过。会话事件与 agent 生命周期是 DSH
+  内部 API，**升级 DSH 后请重跑测试**。
+- 15 分钟的新鲜度窗口是固定的，不可配置。
+- **不判断"任务是否其实已经做完了"**：如果是，会多问一轮（消息里要求先核对状态，属预期行为）。
+- 子代理会话不处理。
 
-Design notes, source references, and the real-environment verification records are in
-[docs/notes.md](docs/notes.md) (Chinese).
+设计依据、源码出处、真实验证记录在 [docs/notes.md](docs/notes.md)。
 
-## License
+## 许可
 
-MIT — see [LICENSE](LICENSE).
+MIT，见 [LICENSE](LICENSE)。
