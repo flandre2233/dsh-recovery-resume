@@ -10,6 +10,15 @@
   },
   "description": "DSH host plugin: resumes turns interrupted by a host restart, requiring the agent to verify real-world state before continuing",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flandre2233/dsh-recovery-resume.git"
+  },
+  "homepage": "https://github.com/flandre2233/dsh-recovery-resume#readme",
+  "bugs": {
+    "url": "https://github.com/flandre2233/dsh-recovery-resume/issues"
+  },
+  "author": "Ruri <flandre2233@gmail.com>",
   "files": [
     "lib",
     "cordis.patch.yml",
