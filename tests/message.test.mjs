@@ -20,7 +20,8 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { buildUserMessage } from '../lib/message.js'
@@ -112,7 +113,7 @@ test('在干净环境下导入 lib/message.js 不需要任何 @deepseek-ai 包',
   // 用子进程 + 空白解析路径跑，证明"零 host 依赖"是真的靠模块系统做到的，
   // 而不是靠本机恰好存在的 node_modules 软链。
   const script = `
-    const m = await import(${JSON.stringify(join(ROOT, 'lib', 'message.js'))});
+    const m = await import(${JSON.stringify(pathToFileURL(join(ROOT, 'lib', 'message.js')).href)});
     const msg = m.buildUserMessage({ content: [], source: { kind: 'p', plugin: 'p' } });
     if (!msg.id || msg.role !== 'user') process.exit(3);
     process.stdout.write('ok');
@@ -126,7 +127,7 @@ test('在干净环境下导入 lib/message.js 不需要任何 @deepseek-ai 包',
 })
 
 test('lib/index.js 里不存在对 host 包的 import（防回归）', () => {
-  const src = execFileSync('/bin/cat', [join(ROOT, 'lib', 'index.js')], { encoding: 'utf8' })
+  const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
   const imports = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])
   const hostImports = imports.filter((s) => s.startsWith('@deepseek-ai/'))
   assert.deepEqual(hostImports, [], `入口不许 import host 包，发现：${hostImports.join(', ')}`)
@@ -136,9 +137,9 @@ test('整个 lib/ 目录都不 import host 包（防回归）', () => {
   const files = ['index.js', 'logic.js', 'ledger.js', 'context.js', 'failure.js', 'message.js']
   const offenders = []
   for (const f of files) {
-    const src = execFileSync('/bin/cat', [join(ROOT, 'lib', f)], { encoding: 'utf8' })
+    const src = readFileSync(join(ROOT, 'lib', f), 'utf8')
     // 只看真正的 import 语句行，避免把注释里提到的包名算进来
-    for (const line of src.split('\n')) {
+    for (const line of src.split(/\r?\n/)) {
       if (!/^\s*import\b/.test(line)) continue
       if (/from\s+'@deepseek-ai\//.test(line)) offenders.push(`${f}: ${line.trim()}`)
     }
@@ -146,8 +147,7 @@ test('整个 lib/ 目录都不 import host 包（防回归）', () => {
   assert.deepEqual(offenders, [], `发现 host 包 import：\n${offenders.join('\n')}`)
 })
 
-test('package.json 不再声明 peerDependencies（没有需要声明的包了）', async () => {
-  const { readFileSync } = await import('node:fs')
+test('package.json 不再声明 peerDependencies（没有需要声明的包了）', () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   assert.equal(pkg.peerDependencies, undefined)
 })
